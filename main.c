@@ -1,3 +1,24 @@
+/*
+ * In this project we are creating an array called seats with the size of number of clients
+ * which we are getting input from the user. The array is all set to 0 using calloc to mark that all the
+ * seats are available in the beginning.
+ *
+ * Then we are creating two binary semaphore arrays and one
+ * binary semaphore. Semaphore arrays (clients, servers) are to be used between server and
+ * client pairs and the binary semaphore which is called "s_client" is to be used between clients to avoid
+ * race conditions.
+ *
+ * Each client generates a random seat number and sets "seatNum", then wakes up the corresponding server.
+ * Server checks the availability of the seat, if the seat is not occupied then sets "seats[seatNum]" to
+ * the clients ID. Then flag_seatReserved is set to 1 to notify the client that the reservation is complete.
+ * After setting the reservation flag, server thread exits waking up the client to let the client thread
+ * exit too.
+ *
+ * If the seat is occupied then server thread basically wakes up the client thread again which will cause
+ * the aforementioned process to loop until a seat is finally reserved for the client.
+ *
+ */
+
 #include <stdio.h>
 #include <pthread.h>
 #include <stdlib.h>
@@ -5,9 +26,9 @@
 #include <semaphore.h>
 #include <unistd.h>
 
-// Char array to keep seats. 0 = available, (any-other-number) = occupied.
-// Using char array, thus the program will take less space on memory.
+// Int array to keep seats. 0 = available, (any-other-number) = occupied.
 int *seats = NULL;
+int numberOfSeats = 0;
 
 // Semaphore for the so-called "line"
 sem_t *clients = NULL;
@@ -17,12 +38,6 @@ sem_t s_client;
 // Seat number
 int seatNum;
 int seatReserved = 0;
-
-// Creating a struct to pass to client threads with the customer ID and number of seats.
-struct thread_arguments{
-    int customerID;
-    int numSeats;
-};
 
 int generateRandSeatNum(int upperLimit) {
     return rand() % (upperLimit);
@@ -38,22 +53,23 @@ void sleepRandom() {
 
 }
 
-void *client(void *args) {
+void *client(void *client_id) {
 
-    struct thread_arguments *arguments = args;
 
     sem_wait(&s_client);
 
+    int clientID = * (int *)client_id;
+
     while(1) {
 
-        sem_wait(&clients[arguments->customerID]);
+        sem_wait(&clients[clientID]);
 
 
         if(!seatReserved) {
 
-            seatNum = generateRandSeatNum(arguments->numSeats);
-            printf("Generated seat num = %d by client %d\n", seatNum, arguments->customerID);
-            sem_post(&servers[arguments->customerID]);
+            seatNum = generateRandSeatNum(numberOfSeats);
+            //printf("Generated seat num = %d by client %d\n", seatNum, clientID);
+            sem_post(&servers[clientID]);
 
         } else {
             printf("Exiting thread\n");
@@ -65,82 +81,97 @@ void *client(void *args) {
 
 }
 
-void *server(void *args) {
+void *server(void *client_id) {
 
-    struct thread_arguments *arguments = args;
+    int clientID = *(int *)client_id;
 
     while(1) {
-        sem_wait(&servers[arguments->customerID]);
+        sem_wait(&servers[clientID]);
 
         if(!seats[seatNum]) {
-            printf("Seat number %d reserved for customer %d\n", seatNum, arguments->customerID);
+            printf("Seat number %d reserved for client %d\n", seatNum +1, clientID +1);
+            seats[seatNum] = clientID + 1;
             seatReserved = 1;
-            seats[seatNum] = arguments->customerID;
-            sem_post(&clients[arguments->customerID]);
+            sem_post(&clients[clientID]);
             pthread_exit(NULL);
         }else {
-            printf("Seat was not available\n");
-            sem_post(&clients[arguments->customerID]);
+            //printf("Seat was not available\n");
+            sem_post(&clients[clientID]);
         }
     }
 
 }
 
+void writeToFile(int *seats, int numSeats){
+
+    FILE *file = fopen("output.txt","w");
+
+    fprintf(file, "Number of total seats :\t%d\n", numSeats);
+
+    fprintf(file, "----------------------------------------------\n");
+    for (int i = 0; i < numSeats; i++) {
+        fprintf(file, "Client #%d reserves seat #%d\n", seats[i], i);
+    }
+
+    fprintf(file, "----------------------------------------------\n");
+    fprintf(file, "All seats are reserved\n");
+    fclose(file);
+
+}
+
 int main(int argc, char *argv[]) {
 
+    int *thread_IDs = NULL;
+
     // Getting number of seats from command-line argument.
-    int numSeats = strtol(argv[1], NULL, 10);
+    numberOfSeats = strtol(argv[1], NULL, 10);
 
     // Set the seed for rand() to sleep random in milliseconds.
     srand(time(NULL));
 
     // Creating as many seats as the user defined.
-    seats = calloc(numSeats, sizeof(int));
+    seats = calloc(numberOfSeats, sizeof(int));
 
     if(seats == NULL) {
         printf("There was an error callocing for seats\n");
         exit(-1);
     }
 
-    // Setting each seat (char actually) to 0 which means available.
-    memset(seats, 0, numSeats);
+    clients = calloc(numberOfSeats, sizeof(sem_t));
+    servers = calloc(numberOfSeats, sizeof(sem_t));
 
-    clients = calloc(numSeats, sizeof(sem_t));
-    servers = calloc(numSeats, sizeof(sem_t));
+    thread_IDs = calloc(numberOfSeats, sizeof(int));
 
-    for (int i = 0; i < numSeats; i++) {
+    for (int i = 0; i < numberOfSeats; i++) {
         sem_init(&clients[i], 0, 1);
         sem_init(&servers[i], 0, 0);
+        thread_IDs[i] = i;
     }
     sem_init(&s_client, 0, 1);
 
-    pthread_t *clientID = calloc(numSeats, sizeof(pthread_t));
-    pthread_t *serverID = calloc(numSeats, sizeof(pthread_t));
+    pthread_t *clientID = calloc(numberOfSeats, sizeof(pthread_t));
+    pthread_t *serverID = calloc(numberOfSeats, sizeof(pthread_t));
 
-    struct thread_arguments *t_args = calloc(numSeats, sizeof(struct thread_arguments));
 
-    for (int i = 0; i < numSeats; i++) {
 
-        t_args[i].customerID = i;
-        t_args[i].numSeats = numSeats;
-
+    for (int i = 0; i < numberOfSeats ; i++) {
+        pthread_create(&clientID[i], NULL, client, &thread_IDs[i]);
+        pthread_create(&serverID[i], NULL, server, &thread_IDs[i]);
     }
 
-    for (int i = 0; i < numSeats ; i++) {
-        pthread_create(&clientID[i], NULL, client, &t_args[i]);
-        pthread_create(&serverID[i], NULL, server, &t_args[i]);
-    }
-
-    for (int i = 0; i < numSeats ; i++) {
+    for (int i = 0; i < numberOfSeats ; i++) {
         pthread_join(clientID[i], NULL);
         pthread_join(serverID[i], NULL);
     }
 
 
-    puts("---------------");
-    for (int i = 0; i < numSeats; i++) {
+    //writeToFile(seats, numberOfSeats);
 
-        printf("Seat num %d reserved for customer num %d\n", i+1, seats[i]+1);
+    printf("\n======================================\n");
+
+    for (int i = 0; i < numberOfSeats; i++) {
+
+        printf("Seat number %d is reserved by client %d\n", i+1, seats[i]);
 
     }
 
