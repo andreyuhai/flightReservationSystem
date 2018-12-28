@@ -1,6 +1,6 @@
 /*
  * In this project we are creating an array called seats with the size of number of clients
- * which we are getting input from the user. The array is all set to 0 using calloc to mark that all the
+ * which we are getting input by the user. The array is all set to 0 using calloc to mark that all the
  * seats are available in the beginning.
  *
  * Then we are creating two binary semaphore arrays and one
@@ -10,12 +10,12 @@
  *
  * Each client generates a random seat number and sets "seatNum", then wakes up the corresponding server.
  * Server checks the availability of the seat, if the seat is not occupied then sets "seats[seatNum]" to
- * the clients ID. Then flag_seatReserved is set to 1 to notify the client that the reservation is complete.
+ * the clients ID. Then flag_reserved is set to 1 to notify the client that the reservation is complete.
  * After setting the reservation flag, server thread exits waking up the client to let the client thread
- * exit too.
+ * exit as well.
  *
- * If the seat is occupied then server thread basically wakes up the client thread again which will cause
- * the aforementioned process to loop until a seat is finally reserved for the client.
+ * If the seat is occupied, then the corresponding server thread basically wakes up the client thread
+ * again which will cause the aforementioned process to loop until a seat is finally reserved for the client.
  *
  */
 
@@ -37,7 +37,7 @@ sem_t s_client;
 
 // Seat number
 int seatNum;
-int seatReserved = 0;
+int flag_reserved = 0;
 
 int generateRandSeatNum(int upperLimit) {
     return rand() % (upperLimit);
@@ -65,15 +65,15 @@ void *client(void *client_id) {
         sem_wait(&clients[clientID]);
 
 
-        if(!seatReserved) {
+        if(!flag_reserved) {
 
             seatNum = generateRandSeatNum(numberOfSeats);
             //printf("Generated seat num = %d by client %d\n", seatNum, clientID);
             sem_post(&servers[clientID]);
 
         } else {
-            printf("Exiting thread\n");
-            seatReserved = 0;
+            //printf("Exiting thread\n");
+            flag_reserved = 0;
             sem_post(&s_client);
             pthread_exit(NULL);
         }
@@ -89,9 +89,9 @@ void *server(void *client_id) {
         sem_wait(&servers[clientID]);
 
         if(!seats[seatNum]) {
-            printf("Seat number %d reserved for client %d\n", seatNum +1, clientID +1);
+            //printf("Seat number %d reserved for client %d\n", seatNum +1, clientID +1);
             seats[seatNum] = clientID + 1;
-            seatReserved = 1;
+            flag_reserved = 1;
             sem_post(&clients[clientID]);
             pthread_exit(NULL);
         }else {
@@ -175,8 +175,10 @@ int main(int argc, char *argv[]) {
 
     }
 
-    // Freeing seats at the end of the program to avoid memory leak.
+    // Freeing all the pointers to avoid memory leak.
     free(seats);
-
+    free(thread_IDs);
+    free(clientID);
+    free(serverID);
     return 0;
 }
